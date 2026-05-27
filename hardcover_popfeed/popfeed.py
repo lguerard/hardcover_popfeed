@@ -14,11 +14,11 @@ _COLLECTION_LIST_ITEM = "social.popfeed.feed.listItem"
 
 # Hardcover status_id → Popfeed listItem status
 _STATUS_MAP: dict[int, str] = {
-    1: "social.popfeed.feed.listItem#backlog",
-    2: "social.popfeed.feed.listItem#in_progress",
-    3: "social.popfeed.feed.listItem#finished",
-    4: "social.popfeed.feed.listItem#in_progress",  # Paused → in_progress
-    5: "social.popfeed.feed.listItem#abandoned",
+    1: "#backlog",
+    2: "#in_progress",
+    3: "#finished",
+    4: "#in_progress",  # Paused → in_progress
+    5: "#abandoned",
 }
 
 _BOOKS_LIST_NAME = "Books"
@@ -89,7 +89,7 @@ def _build_list_item_record(
     Returns:
         dict: Record value ready for createRecord/putRecord.
     """
-    status = _STATUS_MAP.get(book.status_id, "social.popfeed.feed.listItem#backlog")
+    status = _STATUS_MAP.get(book.status_id, "#backlog")
 
     record: dict = {
         "$type": _COLLECTION_LIST_ITEM,
@@ -105,7 +105,7 @@ def _build_list_item_record(
         record["title"] = book.title
 
     if book.cover_url:
-        record["image"] = book.cover_url
+        record["posterUrl"] = book.cover_url
 
     # Attach reading progress for in-progress books
     if book.status_id in (2, 4) and book.latest_read:
