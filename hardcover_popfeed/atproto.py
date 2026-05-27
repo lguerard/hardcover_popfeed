@@ -111,9 +111,7 @@ class AtProtoClient:
                 message = body.get("message") or body.get("error") or ""
             except Exception:
                 message = response.text[:200]
-            raise AtProtoError(
-                f"XRPC error {response.status_code}: {message}"
-            )
+            raise AtProtoError(f"XRPC error {response.status_code}: {message}")
 
     def create_session(self, identifier: str, password: str) -> AtProtoSession:
         """Authenticate and store a session.
@@ -187,9 +185,7 @@ class AtProtoClient:
         self._raise_for_error(response)
         return response.json()
 
-    def iter_all_records(
-        self, did: str, collection: str
-    ) -> Iterator[dict]:
+    def iter_all_records(self, did: str, collection: str) -> Iterator[dict]:
         """Yield every record in a collection, handling pagination.
 
         Parameters:
@@ -213,9 +209,7 @@ class AtProtoClient:
             if not cursor:
                 break
 
-    def create_record(
-        self, did: str, collection: str, record: dict
-    ) -> dict:
+    def create_record(self, did: str, collection: str, record: dict) -> dict:
         """Create a new record in a collection.
 
         Parameters:
@@ -241,15 +235,11 @@ class AtProtoClient:
                 headers=self._auth_headers(),
             )
         except httpx.RequestError as exc:
-            raise AtProtoError(
-                f"createRecord request failed: {exc}"
-            ) from exc
+            raise AtProtoError(f"createRecord request failed: {exc}") from exc
         self._raise_for_error(response)
         return response.json()
 
-    def put_record(
-        self, did: str, collection: str, rkey: str, record: dict
-    ) -> dict:
+    def put_record(self, did: str, collection: str, rkey: str, record: dict) -> dict:
         """Create or replace a record at a specific rkey.
 
         Parameters:

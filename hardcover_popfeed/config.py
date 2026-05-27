@@ -27,7 +27,7 @@ class Config:
     hardcover_token: str
     popfeed_identifier: str
     popfeed_password: str
-    popfeed_pds_url: str = "https://bsky.social"
+    popfeed_pds_url: str = "https://eurosky.social"
     popfeed_books_list_uri: Optional[str] = field(default=None)
     dry_run: bool = False
 
@@ -57,22 +57,17 @@ class Config:
         if not hardcover_token:
             missing.append("HARDCOVER_TOKEN")
 
-        popfeed_identifier = (
-            os.environ.get("POPFEED_IDENTIFIER", "").strip()
-        )
+        popfeed_identifier = os.environ.get("POPFEED_IDENTIFIER", "").strip()
         if not popfeed_identifier:
             missing.append("POPFEED_IDENTIFIER")
 
-        popfeed_password = (
-            os.environ.get("POPFEED_PASSWORD", "").strip()
-        )
+        popfeed_password = os.environ.get("POPFEED_PASSWORD", "").strip()
         if not popfeed_password:
             missing.append("POPFEED_PASSWORD")
 
         if missing:
             raise ConfigError(
-                "Missing required environment variables: "
-                + ", ".join(missing)
+                "Missing required environment variables: " + ", ".join(missing)
             )
 
         env_dry_run = os.environ.get("DRY_RUN", "").strip().lower()
@@ -83,11 +78,10 @@ class Config:
             popfeed_identifier=popfeed_identifier,
             popfeed_password=popfeed_password,
             popfeed_pds_url=os.environ.get(
-                "POPFEED_PDS_URL", "https://bsky.social"
+                "POPFEED_PDS_URL", "https://eurosky.social"
             ).strip(),
             popfeed_books_list_uri=(
-                os.environ.get("POPFEED_BOOKS_LIST_URI", "").strip()
-                or None
+                os.environ.get("POPFEED_BOOKS_LIST_URI", "").strip() or None
             ),
             dry_run=resolved_dry_run,
         )

@@ -109,9 +109,7 @@ class HardcoverClient:
                 f"HTTP {exc.response.status_code} from Hardcover API"
             ) from exc
         except httpx.RequestError as exc:
-            raise HardcoverError(
-                f"Request to Hardcover API failed: {exc}"
-            ) from exc
+            raise HardcoverError(f"Request to Hardcover API failed: {exc}") from exc
 
         payload: dict = response.json()
         errors = payload.get("errors")

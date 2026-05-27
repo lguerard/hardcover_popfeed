@@ -43,9 +43,7 @@ def run_sync(config: Config) -> None:
 
         popfeed = PopfeedClient(atproto, dry_run=config.dry_run)
 
-        list_uri = popfeed.ensure_books_list(
-            hint_uri=config.popfeed_books_list_uri
-        )
+        list_uri = popfeed.ensure_books_list(hint_uri=config.popfeed_books_list_uri)
 
         synced = 0
         for book in books:
@@ -53,10 +51,6 @@ def run_sync(config: Config) -> None:
                 popfeed.sync_book(book, list_uri)
                 synced += 1
             except Exception as exc:
-                logger.warning(
-                    "Failed to sync %r: %s", book.title, exc
-                )
+                logger.warning("Failed to sync %r: %s", book.title, exc)
 
-    logger.info(
-        "Sync complete: %d/%d books processed.", synced, len(books)
-    )
+    logger.info("Sync complete: %d/%d books processed.", synced, len(books))

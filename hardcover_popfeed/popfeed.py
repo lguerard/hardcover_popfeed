@@ -45,15 +45,13 @@ def _build_identifiers(book: HardcoverBook) -> PopfeedIdentifiers:
     return PopfeedIdentifiers(
         isbn10=book.isbn_10 or None,
         isbn13=book.isbn_13 or None,
-        other=f"hardcover:{book.book_id}" if not (
-            book.isbn_10 or book.isbn_13
-        ) else None,
+        other=f"hardcover:{book.book_id}"
+        if not (book.isbn_10 or book.isbn_13)
+        else None,
     )
 
 
-def _identifiers_match(
-    existing_ids: dict, desired_ids: PopfeedIdentifiers
-) -> bool:
+def _identifiers_match(existing_ids: dict, desired_ids: PopfeedIdentifiers) -> bool:
     """Check if existing Popfeed identifiers match desired ones.
 
     Matching priority: isbn13 > isbn10 > other.
@@ -91,9 +89,7 @@ def _build_list_item_record(
     Returns:
         dict: Record value ready for createRecord/putRecord.
     """
-    status = _STATUS_MAP.get(
-        book.status_id, "social.popfeed.feed.listItem#backlog"
-    )
+    status = _STATUS_MAP.get(book.status_id, "social.popfeed.feed.listItem#backlog")
 
     record: dict = {
         "$type": _COLLECTION_LIST_ITEM,
@@ -136,9 +132,7 @@ class PopfeedClient:
         dry_run (bool): If True, log but do not write records.
     """
 
-    def __init__(
-        self, atproto: AtProtoClient, dry_run: bool = False
-    ) -> None:
+    def __init__(self, atproto: AtProtoClient, dry_run: bool = False) -> None:
         """Initialise with an authenticated AT Protocol client.
 
         Parameters:
@@ -148,9 +142,7 @@ class PopfeedClient:
         self._atproto = atproto
         self._dry_run = dry_run
 
-    def ensure_books_list(
-        self, hint_uri: Optional[str] = None
-    ) -> str:
+    def ensure_books_list(self, hint_uri: Optional[str] = None) -> str:
         """Find or create the user's Books list on Popfeed.
 
         Parameters:
@@ -216,9 +208,7 @@ class PopfeedClient:
             Optional[dict]: The matching record (uri, cid, value),
                 or None if not found.
         """
-        for record in self._atproto.iter_all_records(
-            did, _COLLECTION_LIST_ITEM
-        ):
+        for record in self._atproto.iter_all_records(did, _COLLECTION_LIST_ITEM):
             value: dict = record.get("value", {})
             if value.get("creativeWorkType") != "book":
                 continue
@@ -240,16 +230,12 @@ class PopfeedClient:
         did = self._atproto.session.did
         identifiers = _build_identifiers(book)
         now = _now_iso()
-        desired_record = _build_list_item_record(
-            book, list_uri, identifiers, now
-        )
+        desired_record = _build_list_item_record(book, list_uri, identifiers, now)
 
         existing = self._find_existing_list_item(did, identifiers)
 
         if existing is None:
-            logger.info(
-                "[create] %r (status_id=%d)", book.title, book.status_id
-            )
+            logger.info("[create] %r (status_id=%d)", book.title, book.status_id)
             if not self._dry_run:
                 self._atproto.create_record(
                     did=did,
@@ -266,9 +252,7 @@ class PopfeedClient:
             return
 
         rkey: str = existing["uri"].split("/")[-1]
-        logger.info(
-            "[update] %r (status_id=%d)", book.title, book.status_id
-        )
+        logger.info("[update] %r (status_id=%d)", book.title, book.status_id)
         if not self._dry_run:
             self._atproto.put_record(
                 did=did,

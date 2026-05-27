@@ -12,8 +12,7 @@ def main() -> None:
     parser = argparse.ArgumentParser(
         prog="hardcover-popfeed",
         description=(
-            "Sync reading progress from Hardcover to Popfeed "
-            "via AT Protocol."
+            "Sync reading progress from Hardcover to Popfeed via AT Protocol."
         ),
     )
     parser.add_argument(

@@ -7,10 +7,7 @@ name = "hardcover-popfeed"
 version = "0.1.0"
 description = "Sync reading progress from Hardcover to Popfeed via AT Protocol"
 requires-python = ">=3.11"
-dependencies = [
-    "httpx>=0.27",
-    "python-dotenv>=1.0",
-]
+dependencies = ["httpx>=0.27", "python-dotenv>=1.0"]
 
 [project.scripts]
 hardcover-popfeed = "hardcover_popfeed.__main__:main"

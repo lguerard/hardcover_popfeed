@@ -23,14 +23,14 @@ Copy `.env.example` to `.env` and fill in the values:
 cp .env.example .env
 ```
 
-| Variable | Required | Description |
-|---|---|---|
-| `HARDCOVER_TOKEN` | Yes | Hardcover API token |
-| `POPFEED_IDENTIFIER` | Yes | Your Popfeed handle (e.g. `you.bsky.social`) |
-| `POPFEED_PASSWORD` | Yes | App password |
-| `POPFEED_PDS_URL` | No | PDS URL (default: `https://bsky.social`) |
-| `POPFEED_BOOKS_LIST_URI` | No | Pre-configured list AT URI; auto-created if unset |
-| `DRY_RUN` | No | Set to `true` to log without writing |
+| Variable                 | Required | Description                                       |
+| ------------------------ | -------- | ------------------------------------------------- |
+| `HARDCOVER_TOKEN`        | Yes      | Hardcover API token                               |
+| `POPFEED_IDENTIFIER`     | Yes      | Your Popfeed handle (e.g. `you.bsky.social`)      |
+| `POPFEED_PASSWORD`       | Yes      | App password                                      |
+| `POPFEED_PDS_URL`        | No       | PDS URL (default: `https://bsky.social`)          |
+| `POPFEED_BOOKS_LIST_URI` | No       | Pre-configured list AT URI; auto-created if unset |
+| `DRY_RUN`                | No       | Set to `true` to log without writing              |
 
 ## Usage
 
@@ -56,9 +56,9 @@ hardcover-popfeed --env-file /path/to/.env
 ### Status Mapping
 
 | Hardcover Status | Popfeed Status |
-|---|---|
-| Want to Read (1) | backlog |
-| Reading (2) | in_progress |
-| Read (3) | finished |
-| Paused (4) | in_progress |
-| Abandoned (5) | abandoned |
+| ---------------- | -------------- |
+| Want to Read (1) | backlog        |
+| Reading (2)      | in_progress    |
+| Read (3)         | finished       |
+| Paused (4)       | in_progress    |
+| Abandoned (5)    | abandoned      |
