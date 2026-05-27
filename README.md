@@ -29,7 +29,7 @@ cp .env.example .env
 | `POPFEED_IDENTIFIER`     | Yes      | Your Popfeed handle (e.g. `you.bsky.social`)      |
 | `POPFEED_PASSWORD`       | Yes      | App password                                      |
 | `POPFEED_PDS_URL`        | No       | PDS URL (default: `https://eurosky.social`)       |
-| `POPFEED_BOOKS_LIST_URI` | No       | Pre-configured list AT URI; auto-created if unset |
+| `POPFEED_BOOKS_LIST_URI` | No       | Pre-configured list AT URI; validated and ignored if stale/invalid |
 | `DRY_RUN`                | No       | Set to `true` to log without writing              |
 
 ## Usage

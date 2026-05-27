@@ -270,3 +270,33 @@ class AtProtoClient:
             raise AtProtoError(f"putRecord request failed: {exc}") from exc
         self._raise_for_error(response)
         return response.json()
+
+    def get_record(self, did: str, collection: str, rkey: str) -> dict:
+        """Fetch a single record from a collection.
+
+        Parameters:
+            did (str): The repo DID.
+            collection (str): The collection NSID.
+            rkey (str): The record key.
+
+        Returns:
+            dict: XRPC response containing ``uri``, ``cid``, and ``value``.
+
+        Raises:
+            AtProtoError: On request failure.
+        """
+        url = f"{self._pds_url}/xrpc/com.atproto.repo.getRecord"
+        try:
+            response = self._http.get(
+                url,
+                params={
+                    "repo": did,
+                    "collection": collection,
+                    "rkey": rkey,
+                },
+                headers=self._auth_headers(),
+            )
+        except httpx.RequestError as exc:
+            raise AtProtoError(f"getRecord request failed: {exc}") from exc
+        self._raise_for_error(response)
+        return response.json()

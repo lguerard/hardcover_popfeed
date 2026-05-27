@@ -4,7 +4,7 @@ import logging
 from datetime import datetime, timezone
 from typing import Optional
 
-from hardcover_popfeed.atproto import AtProtoClient
+from hardcover_popfeed.atproto import AtProtoClient, AtProtoError
 from hardcover_popfeed.models import HardcoverBook, PopfeedIdentifiers
 
 logger = logging.getLogger(__name__)
@@ -151,11 +151,13 @@ class PopfeedClient:
         Returns:
             str: AT URI of the Books list.
         """
-        if hint_uri:
-            logger.info("Using pre-configured Books list: %s", hint_uri)
-            return hint_uri
-
         did = self._atproto.session.did
+        if hint_uri:
+            validated_uri = self._validate_books_list_uri(hint_uri, did)
+            if validated_uri:
+                logger.info("Using pre-configured Books list: %s", validated_uri)
+                return validated_uri
+
         logger.info("Searching for existing Books list...")
 
         for record in self._atproto.iter_all_records(did, _COLLECTION_LIST):
@@ -167,6 +169,65 @@ class PopfeedClient:
 
         logger.info("No Books list found; creating one.")
         return self._create_books_list(did)
+
+    def _validate_books_list_uri(self, hint_uri: str, did: str) -> Optional[str]:
+        """Validate a pre-configured Books list URI.
+
+        Returns the URI if it is a valid list in the authenticated user's
+        repo; otherwise returns None so normal discovery/creation can run.
+        """
+        if not hint_uri.startswith("at://"):
+            logger.warning(
+                "Ignoring POPFEED_BOOKS_LIST_URI: expected at:// URI, got %r",
+                hint_uri,
+            )
+            return None
+
+        parts = hint_uri.removeprefix("at://").split("/", 2)
+        if len(parts) != 3:
+            logger.warning(
+                "Ignoring POPFEED_BOOKS_LIST_URI: malformed URI %r",
+                hint_uri,
+            )
+            return None
+
+        repo, collection, rkey = parts
+        if collection != _COLLECTION_LIST:
+            logger.warning(
+                "Ignoring POPFEED_BOOKS_LIST_URI: expected collection %r, got %r",
+                _COLLECTION_LIST,
+                collection,
+            )
+            return None
+        if repo != did:
+            logger.warning(
+                "Ignoring POPFEED_BOOKS_LIST_URI: repo %r does not match authenticated DID %r",
+                repo,
+                did,
+            )
+            return None
+
+        try:
+            record = self._atproto.get_record(
+                did=repo,
+                collection=collection,
+                rkey=rkey,
+            )
+        except AtProtoError as exc:
+            logger.warning(
+                "Ignoring POPFEED_BOOKS_LIST_URI: list record not found (%s)",
+                exc,
+            )
+            return None
+
+        value: dict = record.get("value", {})
+        if value.get("name") != _BOOKS_LIST_NAME:
+            logger.warning(
+                "POPFEED_BOOKS_LIST_URI points to %r list (expected %r); continuing anyway",
+                value.get("name"),
+                _BOOKS_LIST_NAME,
+            )
+        return hint_uri
 
     def _create_books_list(self, did: str) -> str:
         """Create a new Books list on Popfeed.
