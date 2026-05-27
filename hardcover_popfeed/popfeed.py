@@ -308,6 +308,14 @@ class PopfeedClient:
             return
 
         existing_value: dict = existing.get("value", {})
+        existing_list_uri = existing_value.get("listUri")
+        if existing_list_uri and existing_list_uri != list_uri:
+            logger.info(
+                "Book %r currently points to %s; moving to %s",
+                book.title,
+                existing_list_uri,
+                list_uri,
+            )
         if not _needs_update(existing_value, desired_record):
             logger.debug("No update needed for %r", book.title)
             return
@@ -328,7 +336,7 @@ class PopfeedClient:
 def _needs_update(existing: dict, desired: dict) -> bool:
     """Determine if an existing listItem needs to be updated.
 
-    Compares status, rating, and bookProgress fields.
+    Compares list membership and key display/progress fields.
 
     Parameters:
         existing (dict): Current record value from Popfeed.
@@ -337,10 +345,17 @@ def _needs_update(existing: dict, desired: dict) -> bool:
     Returns:
         bool: True if any relevant field differs.
     """
-    if existing.get("status") != desired.get("status"):
-        return True
-    if existing.get("rating") != desired.get("rating"):
-        return True
-    if existing.get("bookProgress") != desired.get("bookProgress"):
-        return True
+    fields_to_compare = (
+        "listUri",
+        "creativeWorkType",
+        "status",
+        "identifiers",
+        "title",
+        "posterUrl",
+        "rating",
+        "bookProgress",
+    )
+    for field in fields_to_compare:
+        if existing.get(field) != desired.get(field):
+            return True
     return False
