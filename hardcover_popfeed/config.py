@@ -11,6 +11,14 @@ class ConfigError(Exception):
     """Raised when required configuration is missing or invalid."""
 
 
+def _resolve_pds_url(raw_value: str, default_url: str) -> str:
+    """Return a normalized PDS URL with a protocol."""
+    candidate = raw_value.strip() or default_url
+    if "://" not in candidate:
+        candidate = f"https://{candidate}"
+    return candidate.rstrip("/")
+
+
 @dataclass
 class Config:
     """Application configuration loaded from environment variables.
@@ -77,9 +85,10 @@ class Config:
             hardcover_token=hardcover_token,
             popfeed_identifier=popfeed_identifier,
             popfeed_password=popfeed_password,
-            popfeed_pds_url=os.environ.get(
-                "POPFEED_PDS_URL", "https://eurosky.social"
-            ).strip(),
+            popfeed_pds_url=_resolve_pds_url(
+                os.environ.get("POPFEED_PDS_URL", ""),
+                "https://eurosky.social",
+            ),
             popfeed_books_list_uri=(
                 os.environ.get("POPFEED_BOOKS_LIST_URI", "").strip() or None
             ),
