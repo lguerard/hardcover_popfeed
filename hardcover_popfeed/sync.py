@@ -43,12 +43,20 @@ def run_sync(config: Config) -> None:
 
         popfeed = PopfeedClient(atproto, dry_run=config.dry_run)
 
-        list_uri = popfeed.ensure_books_list(hint_uri=config.popfeed_books_list_uri)
+        if config.popfeed_books_list_uri:
+            logger.warning(
+                "POPFEED_BOOKS_LIST_URI is set but no longer used; "
+                "books are now synced into per-status lists "
+                "(Currently Reading, Read Books, Want to Read, "
+                "Abandoned Books). You can remove that variable."
+            )
+
+        list_uris = popfeed.ensure_status_lists()
 
         synced = 0
         for book in books:
             try:
-                popfeed.sync_book(book, list_uri)
+                popfeed.sync_book(book, list_uris)
                 synced += 1
             except Exception as exc:
                 logger.warning("Failed to sync %r: %s", book.title, exc)

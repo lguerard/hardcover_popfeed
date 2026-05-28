@@ -12,16 +12,22 @@ logger = logging.getLogger(__name__)
 _COLLECTION_LIST = "social.popfeed.feed.list"
 _COLLECTION_LIST_ITEM = "social.popfeed.feed.listItem"
 
-# Hardcover status_id → Popfeed listItem status
-_STATUS_MAP: dict[int, str] = {
-    1: "social.popfeed.feed.listItem#backlog",
-    2: "social.popfeed.feed.listItem#in_progress",
-    3: "social.popfeed.feed.listItem#finished",
-    4: "social.popfeed.feed.listItem#in_progress",  # Paused → in_progress
-    5: "social.popfeed.feed.listItem#abandoned",
+# Hardcover status_id → Popfeed list type
+_LIST_TYPE_MAP: dict[int, str] = {
+    1: "to_read_books",
+    2: "currently_reading_books",
+    3: "read_books",
+    4: "currently_reading_books",  # paused → currently reading
+    5: "abandoned_books",
 }
 
-_BOOKS_LIST_NAME = "Books"
+# Popfeed list type → display name
+_LIST_NAMES: dict[str, str] = {
+    "to_read_books": "Want to Read",
+    "currently_reading_books": "Currently Reading",
+    "read_books": "Read Books",
+    "abandoned_books": "Abandoned Books",
+}
 
 
 def _now_iso() -> str:
@@ -119,6 +125,7 @@ def _identifiers_match(existing_ids: dict, desired_ids: PopfeedIdentifiers) -> b
 def _build_list_item_record(
     book: HardcoverBook,
     list_uri: str,
+    list_type: str,
     identifiers: PopfeedIdentifiers,
     now: str,
 ) -> dict:
@@ -127,19 +134,18 @@ def _build_list_item_record(
     Parameters:
         book (HardcoverBook): Source Hardcover book.
         list_uri (str): AT URI of the parent list.
+        list_type (str): Popfeed list type (e.g. ``"read_books"``).
         identifiers (PopfeedIdentifiers): Book identifiers.
         now (str): ISO-8601 timestamp for ``addedAt``/``updatedAt``.
 
     Returns:
         dict: Record value ready for createRecord/putRecord.
     """
-    status = _STATUS_MAP.get(book.status_id, "social.popfeed.feed.listItem#backlog")
-
     record: dict = {
         "$type": _COLLECTION_LIST_ITEM,
         "listUri": list_uri,
+        "listType": list_type,
         "creativeWorkType": "book",
-        "status": status,
         "identifiers": identifiers.as_dict(),
         "addedAt": _to_datetime_iso(book.date_added, fallback=now),
         "updatedAt": now,
@@ -149,10 +155,10 @@ def _build_list_item_record(
         record["title"] = book.title
 
     if book.cover_url:
-        record["image"] = book.cover_url
+        record["posterUrl"] = book.cover_url
 
-    # Attach reading progress for in-progress books
-    if book.status_id in (2, 4) and book.latest_read:
+    # Attach reading progress for currently-reading books
+    if list_type == "currently_reading_books" and book.latest_read:
         progress: dict = {"status": "in_progress"}
         if book.latest_read.progress_pages is not None:
             progress["currentPage"] = book.latest_read.progress_pages
@@ -162,7 +168,7 @@ def _build_list_item_record(
         record["bookProgress"] = progress
 
     # Attach rating for finished books
-    if book.status_id == 3 and book.rating is not None:
+    if list_type == "read_books" and book.rating is not None:
         record["rating"] = book.rating
 
     return record
@@ -186,57 +192,63 @@ class PopfeedClient:
         self._atproto = atproto
         self._dry_run = dry_run
 
-    def ensure_books_list(self, hint_uri: Optional[str] = None) -> str:
-        """Find or create the user's Books list on Popfeed.
+    def ensure_status_lists(self) -> dict[str, str]:
+        """Find or create all status-specific book lists on Popfeed.
 
-        Parameters:
-            hint_uri (Optional[str]): Pre-configured list URI to use.
+        Popfeed renders books by list type (e.g. ``currently_reading_books``,
+        ``read_books``). This method discovers existing lists and creates any
+        that are missing.
 
         Returns:
-            str: AT URI of the Books list.
+            dict[str, str]: Mapping of list type to AT URI.
         """
-        if hint_uri:
-            logger.info("Using pre-configured Books list: %s", hint_uri)
-            return hint_uri
-
         did = self._atproto.session.did
-        logger.info("Searching for existing Books list...")
+        needed: set[str] = set(_LIST_NAMES.keys())
+        found: dict[str, str] = {}
 
+        logger.info("Searching for existing book lists...")
         for record in self._atproto.iter_all_records(did, _COLLECTION_LIST):
             value: dict = record.get("value", {})
-            if value.get("name") == _BOOKS_LIST_NAME:
-                uri: str = record["uri"]
-                logger.info("Found existing Books list: %s", uri)
-                return uri
+            lt: str = value.get("listType", "")
+            if lt in needed:
+                found[lt] = record["uri"]
+                logger.info("Found %r list: %s", lt, record["uri"])
 
-        logger.info("No Books list found; creating one.")
-        return self._create_books_list(did)
+        for list_type in needed:
+            if list_type not in found:
+                uri = self._create_typed_list(did, list_type)
+                found[list_type] = uri
 
-    def _create_books_list(self, did: str) -> str:
-        """Create a new Books list on Popfeed.
+        return found
+
+    def _create_typed_list(self, did: str, list_type: str) -> str:
+        """Create a status-specific book list on Popfeed.
 
         Parameters:
             did (str): The user's DID.
+            list_type (str): Popfeed list type (e.g. ``"read_books"``).
 
         Returns:
             str: AT URI of the newly created list.
         """
+        name = _LIST_NAMES[list_type]
         record = {
             "$type": _COLLECTION_LIST,
-            "name": _BOOKS_LIST_NAME,
-            "listType": "books",
+            "name": name,
+            "listType": list_type,
+            "authorDid": did,
             "createdAt": _now_iso(),
         }
         if self._dry_run:
-            logger.info("[dry-run] Would create Books list")
-            return f"at://{did}/{_COLLECTION_LIST}/dry-run"
+            logger.info("[dry-run] Would create %r list", name)
+            return f"at://{did}/{_COLLECTION_LIST}/dry-run-{list_type}"
         result = self._atproto.create_record(
             did=did,
             collection=_COLLECTION_LIST,
             record=record,
         )
         uri: str = result["uri"]
-        logger.info("Created Books list: %s", uri)
+        logger.info("Created %r list: %s", name, uri)
         return uri
 
     def _find_existing_list_item(
@@ -261,20 +273,28 @@ class PopfeedClient:
                 return record
         return None
 
-    def sync_book(self, book: HardcoverBook, list_uri: str) -> None:
-        """Sync a single Hardcover book to the Popfeed Books list.
+    def sync_book(
+        self, book: HardcoverBook, list_uris: dict[str, str]
+    ) -> None:
+        """Sync a single Hardcover book to the appropriate Popfeed list.
 
-        Creates a new listItem record if none exists, or updates the
-        existing one if the status or progress has changed.
+        Routes the book to the correct status-specific list based on
+        ``book.status_id``. Creates a new listItem if none exists, or
+        updates the existing one if anything has changed.
 
         Parameters:
             book (HardcoverBook): The Hardcover book to sync.
-            list_uri (str): AT URI of the Books list.
+            list_uris (dict[str, str]): Mapping of list type to AT URI
+                as returned by :meth:`ensure_status_lists`.
         """
         did = self._atproto.session.did
+        list_type = _LIST_TYPE_MAP.get(book.status_id, "to_read_books")
+        list_uri = list_uris[list_type]
         identifiers = _build_identifiers(book)
         now = _now_iso()
-        desired_record = _build_list_item_record(book, list_uri, identifiers, now)
+        desired_record = _build_list_item_record(
+            book, list_uri, list_type, identifiers, now
+        )
 
         existing = self._find_existing_list_item(did, identifiers)
 
@@ -311,7 +331,7 @@ class PopfeedClient:
 def _needs_update(existing: dict, desired: dict) -> bool:
     """Determine if an existing listItem needs to be updated.
 
-    Compares listUri, status, rating, bookProgress, and addedAt fields.
+    Compares listUri, listType, rating, bookProgress, and addedAt.
 
     Parameters:
         existing (dict): Current record value from Popfeed.
@@ -322,7 +342,7 @@ def _needs_update(existing: dict, desired: dict) -> bool:
     """
     if existing.get("listUri") != desired.get("listUri"):
         return True
-    if existing.get("status") != desired.get("status"):
+    if existing.get("listType") != desired.get("listType"):
         return True
     if existing.get("rating") != desired.get("rating"):
         return True
