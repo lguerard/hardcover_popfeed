@@ -92,8 +92,8 @@ class Config:
         env_dry_run = os.environ.get("DRY_RUN", "").strip().lower()
         resolved_dry_run = dry_run or env_dry_run in ("1", "true", "yes")
 
-        raw_pds_url = os.environ.get(
-            "POPFEED_PDS_URL", "https://eurosky.social"
+        raw_pds_url = (
+            os.environ.get("POPFEED_PDS_URL") or "https://eurosky.social"
         ).strip()
         pds_url = _ensure_https(raw_pds_url)
 
