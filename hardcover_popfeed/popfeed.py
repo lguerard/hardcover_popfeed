@@ -33,6 +33,50 @@ def _now_iso() -> str:
     return datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
 
 
+def _to_datetime_iso(value: Optional[str], fallback: str) -> str:
+    """Normalise a date or datetime string to a full ISO-8601 datetime.
+
+    AT Protocol's ``datetime`` type requires a full timestamp with timezone.
+    Hardcover often returns bare dates (e.g. ``"2026-05-22"``); this helper
+    converts them to ``"2026-05-22T00:00:00Z"`` so the indexer accepts the
+    record.
+
+    Parameters:
+        value (Optional[str]): Source date or datetime string.
+        fallback (str): ISO-8601 datetime to use when ``value`` is absent or
+            cannot be parsed.
+
+    Returns:
+        str: ISO-8601 datetime string ending in ``Z``.
+    """
+    if not value:
+        return fallback
+
+    text = value.strip()
+    if not text:
+        return fallback
+
+    if text.endswith("Z"):
+        text = f"{text[:-1]}+00:00"
+
+    try:
+        parsed = datetime.fromisoformat(text)
+    except ValueError:
+        try:
+            parsed = datetime.fromisoformat(f"{text}T00:00:00")
+        except ValueError:
+            logger.warning(
+                "Invalid datetime value %r; using fallback", value
+            )
+            return fallback
+
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    else:
+        parsed = parsed.astimezone(timezone.utc)
+    return parsed.isoformat().replace("+00:00", "Z")
+
+
 def _build_identifiers(book: HardcoverBook) -> PopfeedIdentifiers:
     """Build Popfeed identifiers from a Hardcover book.
 
@@ -97,7 +141,7 @@ def _build_list_item_record(
         "creativeWorkType": "book",
         "status": status,
         "identifiers": identifiers.as_dict(),
-        "addedAt": book.date_added or now,
+        "addedAt": _to_datetime_iso(book.date_added, fallback=now),
         "updatedAt": now,
     }
 
