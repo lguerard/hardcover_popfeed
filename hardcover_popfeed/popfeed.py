@@ -267,7 +267,7 @@ class PopfeedClient:
 def _needs_update(existing: dict, desired: dict) -> bool:
     """Determine if an existing listItem needs to be updated.
 
-    Compares status, rating, and bookProgress fields.
+    Compares listUri, status, rating, and bookProgress fields.
 
     Parameters:
         existing (dict): Current record value from Popfeed.
@@ -276,6 +276,8 @@ def _needs_update(existing: dict, desired: dict) -> bool:
     Returns:
         bool: True if any relevant field differs.
     """
+    if existing.get("listUri") != desired.get("listUri"):
+        return True
     if existing.get("status") != desired.get("status"):
         return True
     if existing.get("rating") != desired.get("rating"):

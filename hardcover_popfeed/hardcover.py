@@ -49,7 +49,7 @@ query GetUserBooks {
       }
       user_book_reads(
         limit: 1
-        order_by: { finished_at: desc_nulls_last }
+        order_by: { started_at: desc_nulls_last }
       ) {
         progress_pages
         started_at
