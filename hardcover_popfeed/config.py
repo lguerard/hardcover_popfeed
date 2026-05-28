@@ -11,6 +11,25 @@ class ConfigError(Exception):
     """Raised when required configuration is missing or invalid."""
 
 
+def _ensure_https(url: str) -> str:
+    """Ensure a URL has an https:// scheme.
+
+    If the URL has no scheme (or only ``http://``), it is
+    normalised to ``https://``.
+
+    Parameters:
+        url (str): Raw URL string, possibly without a scheme.
+
+    Returns:
+        str: URL with ``https://`` scheme.
+    """
+    if url.startswith("https://"):
+        return url
+    if url.startswith("http://"):
+        return "https://" + url[len("http://"):]
+    return "https://" + url
+
+
 @dataclass
 class Config:
     """Application configuration loaded from environment variables.
@@ -73,13 +92,16 @@ class Config:
         env_dry_run = os.environ.get("DRY_RUN", "").strip().lower()
         resolved_dry_run = dry_run or env_dry_run in ("1", "true", "yes")
 
+        raw_pds_url = os.environ.get(
+            "POPFEED_PDS_URL", "https://eurosky.social"
+        ).strip()
+        pds_url = _ensure_https(raw_pds_url)
+
         return cls(
             hardcover_token=hardcover_token,
             popfeed_identifier=popfeed_identifier,
             popfeed_password=popfeed_password,
-            popfeed_pds_url=os.environ.get(
-                "POPFEED_PDS_URL", "https://eurosky.social"
-            ).strip(),
+            popfeed_pds_url=pds_url,
             popfeed_books_list_uri=(
                 os.environ.get("POPFEED_BOOKS_LIST_URI", "").strip() or None
             ),
