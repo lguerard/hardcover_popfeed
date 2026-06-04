@@ -20,11 +20,12 @@ _LIST_TYPE_MAP: dict[int, str] = {
     4: "currently_reading_books",  # paused → currently reading
 }
 
-# Popfeed list type → display name
+# Popfeed list type → display name (includes the shared Recent list)
 _LIST_NAMES: dict[str, str] = {
     "to_read_books": "Want to Read",
     "currently_reading_books": "Currently Reading",
     "read_books": "Read Books",
+    "recent": "Recent",
 }
 
 
@@ -99,7 +100,9 @@ def _build_identifiers(book: HardcoverBook) -> PopfeedIdentifiers:
     )
 
 
-def _identifiers_match(existing_ids: dict, desired_ids: PopfeedIdentifiers) -> bool:
+def _identifiers_match(
+    existing_ids: dict, desired_ids: PopfeedIdentifiers
+) -> bool:
     """Check if existing Popfeed identifiers match desired ones.
 
     Matching priority: isbn13 > isbn10 > other.
@@ -172,6 +175,73 @@ def _build_list_item_record(
     return record
 
 
+def _resolve_finish_date(book: HardcoverBook, fallback: str) -> str:
+    """Return the best available finish date for a completed book.
+
+    Prefers ``latest_read.finished_at``, falls back to
+    ``last_read_date``, then to ``fallback``.
+
+    Parameters:
+        book (HardcoverBook): Source Hardcover book.
+        fallback (str): ISO-8601 datetime to use when no date is found.
+
+    Returns:
+        str: ISO-8601 datetime string.
+    """
+    if book.latest_read and book.latest_read.finished_at:
+        result = _to_datetime_iso(
+            book.latest_read.finished_at, fallback=fallback
+        )
+        if result != fallback:
+            return result
+    return _to_datetime_iso(book.last_read_date, fallback=fallback)
+
+
+def _build_recent_list_item_record(
+    book: HardcoverBook,
+    recent_list_uri: str,
+    identifiers: PopfeedIdentifiers,
+    now: str,
+) -> dict:
+    """Build a Popfeed listItem record for the Recent list.
+
+    Only finished books are added to the Recent list. The completion
+    date is sourced from the most recent reading session when available.
+
+    Parameters:
+        book (HardcoverBook): Source Hardcover book (must be finished).
+        recent_list_uri (str): AT URI of the Recent list.
+        identifiers (PopfeedIdentifiers): Book identifiers.
+        now (str): ISO-8601 timestamp used as ``updatedAt`` and fallback.
+
+    Returns:
+        dict: Record value ready for createRecord/putRecord.
+    """
+    finished_at = _resolve_finish_date(book, fallback=now)
+
+    record: dict = {
+        "$type": _COLLECTION_LIST_ITEM,
+        "listUri": recent_list_uri,
+        "creativeWorkType": "book",
+        "identifiers": identifiers.as_dict(),
+        "status": "finished",
+        "addedAt": finished_at,
+        "completedAt": finished_at,
+        "updatedAt": now,
+    }
+
+    if book.title:
+        record["title"] = book.title
+
+    if book.cover_url:
+        record["posterUrl"] = book.cover_url
+
+    if book.rating is not None:
+        record["rating"] = book.rating
+
+    return record
+
+
 class PopfeedClient:
     """High-level Popfeed operations for syncing books.
 
@@ -191,14 +261,14 @@ class PopfeedClient:
         self._dry_run = dry_run
 
     def ensure_status_lists(self) -> dict[str, str]:
-        """Find or create all status-specific book lists on Popfeed.
+        """Find or create all book lists on Popfeed in a single scan.
 
-        Popfeed renders books by list type (e.g. ``currently_reading_books``,
-        ``read_books``). This method discovers existing lists and creates any
-        that are missing.
+        Discovers and creates (where missing) the three status-specific
+        lists and the shared Recent list.
 
         Returns:
-            dict[str, str]: Mapping of list type to AT URI.
+            dict[str, str]: Mapping of list type to AT URI, including
+                ``"recent"`` for the Recent list.
         """
         did = self._atproto.session.did
         needed: set[str] = set(_LIST_NAMES.keys())
@@ -220,7 +290,7 @@ class PopfeedClient:
         return found
 
     def _create_typed_list(self, did: str, list_type: str) -> str:
-        """Create a status-specific book list on Popfeed.
+        """Create a list on Popfeed with the given type.
 
         Parameters:
             did (str): The user's DID.
@@ -250,13 +320,18 @@ class PopfeedClient:
         return uri
 
     def _find_existing_list_item(
-        self, did: str, identifiers: PopfeedIdentifiers
+        self,
+        did: str,
+        identifiers: PopfeedIdentifiers,
+        list_uri: Optional[str] = None,
     ) -> Optional[dict]:
-        """Search all listItems to find one matching the given identifiers.
+        """Search listItems to find one matching the given identifiers.
 
         Parameters:
             did (str): The user's DID.
             identifiers (PopfeedIdentifiers): Desired book identifiers.
+            list_uri (Optional[str]): When given, only considers items
+                whose ``listUri`` matches this value exactly.
 
         Returns:
             Optional[dict]: The matching record (uri, cid, value),
@@ -266,6 +341,8 @@ class PopfeedClient:
             value: dict = record.get("value", {})
             if value.get("creativeWorkType") != "book":
                 continue
+            if list_uri is not None and value.get("listUri") != list_uri:
+                continue
             existing_ids: dict = value.get("identifiers", {})
             if _identifiers_match(existing_ids, identifiers):
                 return record
@@ -274,10 +351,11 @@ class PopfeedClient:
     def sync_book(
         self, book: HardcoverBook, list_uris: dict[str, str]
     ) -> None:
-        """Sync a single Hardcover book to the appropriate Popfeed list.
+        """Sync a single Hardcover book to the appropriate Popfeed lists.
 
         Routes the book to the correct status-specific list based on
-        ``book.status_id``. Creates a new listItem if none exists, or
+        ``book.status_id``. Finished books (status_id=3) are also added
+        to the Recent list. Creates a new listItem if none exists, or
         updates the existing one if anything has changed.
 
         Parameters:
@@ -288,7 +366,11 @@ class PopfeedClient:
         did = self._atproto.session.did
         list_type = _LIST_TYPE_MAP.get(book.status_id)
         if list_type is None:
-            logger.debug("Skipping %r (status_id=%d, not synced)", book.title, book.status_id)
+            logger.debug(
+                "Skipping %r (status_id=%d, not synced)",
+                book.title,
+                book.status_id,
+            )
             return
         list_uri = list_uris[list_type]
         identifiers = _build_identifiers(book)
@@ -297,7 +379,11 @@ class PopfeedClient:
             book, list_uri, list_type, identifiers, now
         )
 
-        existing = self._find_existing_list_item(did, identifiers)
+        # Scope the lookup to the target list so a book that already
+        # exists in the Recent list is not mistaken for the status record.
+        existing = self._find_existing_list_item(
+            did, identifiers, list_uri=list_uri
+        )
 
         if existing is None:
             logger.info("[create] %r (status_id=%d)", book.title, book.status_id)
@@ -308,29 +394,97 @@ class PopfeedClient:
                     record=desired_record,
                 )
             else:
-                logger.info("[dry-run] Would create listItem for %r", book.title)
+                logger.info(
+                    "[dry-run] Would create listItem for %r", book.title
+                )
+        else:
+            existing_value: dict = existing.get("value", {})
+            if not _needs_update(existing_value, desired_record):
+                logger.debug("No update needed for %r", book.title)
+            else:
+                rkey: str = existing["uri"].split("/")[-1]
+                logger.info(
+                    "[update] %r (status_id=%d)", book.title, book.status_id
+                )
+                if not self._dry_run:
+                    self._atproto.put_record(
+                        did=did,
+                        collection=_COLLECTION_LIST_ITEM,
+                        rkey=rkey,
+                        record=desired_record,
+                    )
+                else:
+                    logger.info(
+                        "[dry-run] Would update listItem for %r", book.title
+                    )
+
+        # Finished books also appear in the Recent list.
+        if list_type == "read_books":
+            recent_list_uri = list_uris.get("recent")
+            if recent_list_uri:
+                self._sync_to_recent_list(
+                    book, recent_list_uri, identifiers, now
+                )
+
+    def _sync_to_recent_list(
+        self,
+        book: HardcoverBook,
+        recent_list_uri: str,
+        identifiers: PopfeedIdentifiers,
+        now: str,
+    ) -> None:
+        """Add or update a finished book in the Recent list.
+
+        Parameters:
+            book (HardcoverBook): The finished book to sync.
+            recent_list_uri (str): AT URI of the Recent list.
+            identifiers (PopfeedIdentifiers): Book identifiers.
+            now (str): ISO-8601 timestamp used as ``updatedAt`` fallback.
+        """
+        did = self._atproto.session.did
+        desired = _build_recent_list_item_record(
+            book, recent_list_uri, identifiers, now
+        )
+        existing = self._find_existing_list_item(
+            did, identifiers, list_uri=recent_list_uri
+        )
+
+        if existing is None:
+            logger.info("[create] %r in Recent list", book.title)
+            if not self._dry_run:
+                self._atproto.create_record(
+                    did=did,
+                    collection=_COLLECTION_LIST_ITEM,
+                    record=desired,
+                )
+            else:
+                logger.info(
+                    "[dry-run] Would add %r to Recent list", book.title
+                )
             return
 
         existing_value: dict = existing.get("value", {})
-        if not _needs_update(existing_value, desired_record):
-            logger.debug("No update needed for %r", book.title)
+        if not _needs_recent_update(existing_value, desired):
+            logger.debug("No update needed for %r in Recent list", book.title)
             return
 
         rkey: str = existing["uri"].split("/")[-1]
-        logger.info("[update] %r (status_id=%d)", book.title, book.status_id)
+        logger.info("[update] %r in Recent list", book.title)
         if not self._dry_run:
             self._atproto.put_record(
                 did=did,
                 collection=_COLLECTION_LIST_ITEM,
                 rkey=rkey,
-                record=desired_record,
+                record=desired,
             )
         else:
-            logger.info("[dry-run] Would update listItem for %r", book.title)
+            logger.info(
+                "[dry-run] Would update %r in Recent list", book.title
+            )
 
 
 def _needs_update(existing: dict, desired: dict) -> bool:
-    """Determine if an existing listItem needs to be updated.
+    """Determine if an existing status-list listItem needs to be updated.
 
     Compares listUri, listType, rating, bookProgress, and addedAt.
 
@@ -348,6 +502,30 @@ def _needs_update(existing: dict, desired: dict) -> bool:
     if existing.get("rating") != desired.get("rating"):
         return True
     if existing.get("bookProgress") != desired.get("bookProgress"):
+        return True
+    if existing.get("addedAt") != desired.get("addedAt"):
+        return True
+    return False
+
+
+def _needs_recent_update(existing: dict, desired: dict) -> bool:
+    """Determine if an existing Recent listItem needs to be updated.
+
+    Compares the fields relevant to recent finished-book entries:
+    status, rating, completedAt, and addedAt.
+
+    Parameters:
+        existing (dict): Current record value from Popfeed.
+        desired (dict): Desired record value.
+
+    Returns:
+        bool: True if any relevant field differs.
+    """
+    if existing.get("status") != desired.get("status"):
+        return True
+    if existing.get("rating") != desired.get("rating"):
+        return True
+    if existing.get("completedAt") != desired.get("completedAt"):
         return True
     if existing.get("addedAt") != desired.get("addedAt"):
         return True
