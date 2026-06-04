@@ -47,8 +47,8 @@ def run_sync(config: Config) -> None:
             logger.warning(
                 "POPFEED_BOOKS_LIST_URI is set but no longer used; "
                 "books are now synced into per-status lists "
-                "(Currently Reading, Read Books, Want to Read, "
-                "Abandoned Books). You can remove that variable."
+                "(Want to Read, Currently Reading, Read Books). "
+                "You can remove that variable."
             )
 
         list_uris = popfeed.ensure_status_lists()

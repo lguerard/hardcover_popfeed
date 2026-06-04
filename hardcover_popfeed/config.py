@@ -26,7 +26,7 @@ def _ensure_https(url: str) -> str:
     if url.startswith("https://"):
         return url
     if url.startswith("http://"):
-        return "https://" + url[len("http://"):]
+        return "https://" + url[len("http://") :]
     return "https://" + url
 
 

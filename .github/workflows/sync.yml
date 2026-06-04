@@ -2,7 +2,7 @@ name: Sync Hardcover → Popfeed
 
 on:
     schedule:
-        - cron: "0 */6 * * *" # every 6 hours
+        - cron: "0 2,8 * * *" # 02:00 and 08:00 UTC daily
     workflow_dispatch: # manual trigger
 
 jobs:

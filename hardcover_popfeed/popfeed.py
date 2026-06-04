@@ -12,13 +12,12 @@ logger = logging.getLogger(__name__)
 _COLLECTION_LIST = "social.popfeed.feed.list"
 _COLLECTION_LIST_ITEM = "social.popfeed.feed.listItem"
 
-# Hardcover status_id → Popfeed list type
+# Hardcover status_id → Popfeed list type (status_id 5 = abandoned, intentionally excluded)
 _LIST_TYPE_MAP: dict[int, str] = {
     1: "to_read_books",
     2: "currently_reading_books",
     3: "read_books",
     4: "currently_reading_books",  # paused → currently reading
-    5: "abandoned_books",
 }
 
 # Popfeed list type → display name
@@ -26,7 +25,6 @@ _LIST_NAMES: dict[str, str] = {
     "to_read_books": "Want to Read",
     "currently_reading_books": "Currently Reading",
     "read_books": "Read Books",
-    "abandoned_books": "Abandoned Books",
 }
 
 
@@ -288,7 +286,10 @@ class PopfeedClient:
                 as returned by :meth:`ensure_status_lists`.
         """
         did = self._atproto.session.did
-        list_type = _LIST_TYPE_MAP.get(book.status_id, "to_read_books")
+        list_type = _LIST_TYPE_MAP.get(book.status_id)
+        if list_type is None:
+            logger.debug("Skipping %r (status_id=%d, not synced)", book.title, book.status_id)
+            return
         list_uri = list_uris[list_type]
         identifiers = _build_identifiers(book)
         now = _now_iso()
