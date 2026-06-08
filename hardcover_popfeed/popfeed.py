@@ -82,6 +82,27 @@ def _to_datetime_iso(value: Optional[str], fallback: str) -> str:
     return parsed.isoformat().replace("+00:00", "Z")
 
 
+def _is_book_complete(book: HardcoverBook) -> bool:
+    """Return True when progress_pages reaches the total page count.
+
+    Used to promote a currently-reading book to read when Hardcover has not
+    yet updated status_id to 3 despite the user reaching the last page.
+
+    Parameters:
+        book (HardcoverBook): Source book record.
+
+    Returns:
+        bool: True if progress_pages >= pages and both are known.
+    """
+    return (
+        book.latest_read is not None
+        and book.latest_read.progress_pages is not None
+        and book.pages is not None
+        and book.pages > 0
+        and book.latest_read.progress_pages >= book.pages
+    )
+
+
 def _build_identifiers(book: HardcoverBook) -> PopfeedIdentifiers:
     """Build Popfeed identifiers from a Hardcover book.
 
@@ -372,6 +393,20 @@ class PopfeedClient:
                 book.status_id,
             )
             return
+
+        # Hardcover sometimes keeps status_id=2 when the user reaches the last
+        # page without explicitly marking the book finished.  Promote to
+        # read_books so the record lands in the right list and is added to
+        # the Recent list, matching user intent.
+        if list_type == "currently_reading_books" and _is_book_complete(book):
+            logger.info(
+                "Promoting %r to read_books (progress_pages=%d >= pages=%d)",
+                book.title,
+                book.latest_read.progress_pages,  # type: ignore[union-attr]
+                book.pages,
+            )
+            list_type = "read_books"
+
         list_uri = list_uris[list_type]
         identifiers = _build_identifiers(book)
         now = _now_iso()
