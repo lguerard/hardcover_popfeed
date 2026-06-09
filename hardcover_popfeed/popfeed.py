@@ -1,6 +1,7 @@
 """Popfeed-specific operations built on top of the AT Protocol client."""
 
 import logging
+import re
 from datetime import datetime, timezone
 from typing import Optional
 
@@ -27,6 +28,43 @@ _LIST_NAMES: dict[str, str] = {
     "read_books": "Read Books",
     "recent": "Recent",
 }
+
+
+def _book_id_key(identifiers: PopfeedIdentifiers) -> str:
+    """Return a stable, rkey-safe identity segment for a book.
+
+    Priority isbn13 > isbn10 > other (``hardcover:<id>``).  The value is
+    stripped to alphanumerics so the resulting record key matches the AT
+    Protocol rkey grammar.
+
+    Parameters:
+        identifiers (PopfeedIdentifiers): The book identifiers.
+
+    Returns:
+        str: An identity segment such as ``"isbn13.9780985545505"`` or
+            ``"hc.2114801"``.
+    """
+    if identifiers.isbn13:
+        return f"isbn13.{re.sub(r'[^0-9Xx]', '', identifiers.isbn13)}"
+    if identifiers.isbn10:
+        return f"isbn10.{re.sub(r'[^0-9Xx]', '', identifiers.isbn10)}"
+    other = identifiers.other or ""
+    return f"hc.{re.sub(r'[^0-9A-Za-z]', '', other)}"
+
+
+def _status_rkey(id_key: str) -> str:
+    """Deterministic rkey for a book's single status-list item.
+
+    The same rkey is reused as the book moves between the Want to Read,
+    Currently Reading, and Read Books lists, so putRecord moves the record in
+    place instead of leaving a stale copy in the old list.
+    """
+    return f"b.s.{id_key}"
+
+
+def _recent_rkey(id_key: str) -> str:
+    """Deterministic rkey for a finished book's Recent-list item."""
+    return f"b.r.{id_key}"
 
 
 def _now_iso() -> str:
@@ -82,6 +120,27 @@ def _to_datetime_iso(value: Optional[str], fallback: str) -> str:
     return parsed.isoformat().replace("+00:00", "Z")
 
 
+def _is_book_complete(book: HardcoverBook) -> bool:
+    """Return True when progress_pages reaches the total page count.
+
+    Used to promote a currently-reading book to read when Hardcover has not
+    yet updated status_id to 3 despite the user reaching the last page.
+
+    Parameters:
+        book (HardcoverBook): Source book record.
+
+    Returns:
+        bool: True if progress_pages >= pages and both are known.
+    """
+    return (
+        book.latest_read is not None
+        and book.latest_read.progress_pages is not None
+        and book.pages is not None
+        and book.pages > 0
+        and book.latest_read.progress_pages >= book.pages
+    )
+
+
 def _build_identifiers(book: HardcoverBook) -> PopfeedIdentifiers:
     """Build Popfeed identifiers from a Hardcover book.
 
@@ -98,29 +157,6 @@ def _build_identifiers(book: HardcoverBook) -> PopfeedIdentifiers:
         if not (book.isbn_10 or book.isbn_13)
         else None,
     )
-
-
-def _identifiers_match(
-    existing_ids: dict, desired_ids: PopfeedIdentifiers
-) -> bool:
-    """Check if existing Popfeed identifiers match desired ones.
-
-    Matching priority: isbn13 > isbn10 > other.
-
-    Parameters:
-        existing_ids (dict): Identifiers stored in the Popfeed record.
-        desired_ids (PopfeedIdentifiers): Desired identifiers.
-
-    Returns:
-        bool: True if at least one identifier matches.
-    """
-    if desired_ids.isbn13 and existing_ids.get("isbn13") == desired_ids.isbn13:
-        return True
-    if desired_ids.isbn10 and existing_ids.get("isbn10") == desired_ids.isbn10:
-        return True
-    if desired_ids.other and existing_ids.get("other") == desired_ids.other:
-        return True
-    return False
 
 
 def _build_list_item_record(
@@ -319,34 +355,31 @@ class PopfeedClient:
         logger.info("Created %r list: %s", name, uri)
         return uri
 
-    def _find_existing_list_item(
-        self,
-        did: str,
-        identifiers: PopfeedIdentifiers,
-        list_uri: Optional[str] = None,
-    ) -> Optional[dict]:
-        """Search listItems to find one matching the given identifiers.
+    def purge_legacy_book_records(self) -> None:
+        """Delete book listItems written with non-deterministic (random TID) rkeys.
 
-        Parameters:
-            did (str): The user's DID.
-            identifiers (PopfeedIdentifiers): Desired book identifiers.
-            list_uri (Optional[str]): When given, only considers items
-                whose ``listUri`` matches this value exactly.
-
-        Returns:
-            Optional[dict]: The matching record (uri, cid, value),
-                or None if not found.
+        Older versions created each book listItem with createRecord, producing a
+        random rkey.  The plugin now writes deterministic, dotted rkeys
+        (``b.s.…`` / ``b.r.…``), so any book listItem whose rkey contains no dot
+        is a legacy duplicate and is removed.  The scan is scoped to
+        ``creativeWorkType == "book"`` so records owned by other Popfeed sources
+        sharing the same repo (e.g. Jellyfin movies and episodes) are never
+        touched, even though they also use random TID rkeys.
         """
+        did = self._atproto.session.did
+        removed = 0
         for record in self._atproto.iter_all_records(did, _COLLECTION_LIST_ITEM):
             value: dict = record.get("value", {})
             if value.get("creativeWorkType") != "book":
                 continue
-            if list_uri is not None and value.get("listUri") != list_uri:
+            rkey = record["uri"].split("/")[-1]
+            if "." in rkey:
                 continue
-            existing_ids: dict = value.get("identifiers", {})
-            if _identifiers_match(existing_ids, identifiers):
-                return record
-        return None
+            if not self._dry_run:
+                self._atproto.delete_record(did, _COLLECTION_LIST_ITEM, rkey)
+            removed += 1
+        if removed:
+            logger.info("Purged %d legacy book record(s).", removed)
 
     def sync_book(
         self, book: HardcoverBook, list_uris: dict[str, str]
@@ -372,65 +405,76 @@ class PopfeedClient:
                 book.status_id,
             )
             return
+
+        # Hardcover sometimes keeps status_id=2 when the user reaches the last
+        # page without explicitly marking the book finished.  Promote to
+        # read_books so the record lands in the right list and is added to
+        # the Recent list, matching user intent.
+        if list_type == "currently_reading_books" and _is_book_complete(book):
+            logger.info(
+                "Promoting %r to read_books (progress_pages=%d >= pages=%d)",
+                book.title,
+                book.latest_read.progress_pages,  # type: ignore[union-attr]
+                book.pages,
+            )
+            list_type = "read_books"
+
         list_uri = list_uris[list_type]
         identifiers = _build_identifiers(book)
+        id_key = _book_id_key(identifiers)
+        status_rkey = _status_rkey(id_key)
         now = _now_iso()
         desired_record = _build_list_item_record(
             book, list_uri, list_type, identifiers, now
         )
 
-        # Scope the lookup to the target list so a book that already
-        # exists in the Recent list is not mistaken for the status record.
-        existing = self._find_existing_list_item(
-            did, identifiers, list_uri=list_uri
+        # One deterministic record per book.  putRecord upserts in place and, when
+        # the status changes, moves the record between lists by rewriting listUri.
+        existing = self._atproto.get_record(
+            did, _COLLECTION_LIST_ITEM, status_rkey
         )
+        existing_value = existing.get("value") if existing else None
+        if existing_value and existing_value.get("addedAt"):
+            # Preserve the original add date so unchanged books stay idempotent.
+            desired_record["addedAt"] = existing_value["addedAt"]
 
-        if existing is None:
-            logger.info("[create] %r (status_id=%d)", book.title, book.status_id)
+        if existing_value is not None and not _needs_update(
+            existing_value, desired_record
+        ):
+            logger.debug("No update needed for %r", book.title)
+        else:
+            verb = "update" if existing_value is not None else "create"
+            logger.info(
+                "[%s] %r (status_id=%d)", verb, book.title, book.status_id
+            )
             if not self._dry_run:
-                self._atproto.create_record(
+                self._atproto.put_record(
                     did=did,
                     collection=_COLLECTION_LIST_ITEM,
+                    rkey=status_rkey,
                     record=desired_record,
                 )
             else:
                 logger.info(
-                    "[dry-run] Would create listItem for %r", book.title
+                    "[dry-run] Would %s listItem for %r", verb, book.title
                 )
-        else:
-            existing_value: dict = existing.get("value", {})
-            if not _needs_update(existing_value, desired_record):
-                logger.debug("No update needed for %r", book.title)
-            else:
-                rkey: str = existing["uri"].split("/")[-1]
-                logger.info(
-                    "[update] %r (status_id=%d)", book.title, book.status_id
-                )
-                if not self._dry_run:
-                    self._atproto.put_record(
-                        did=did,
-                        collection=_COLLECTION_LIST_ITEM,
-                        rkey=rkey,
-                        record=desired_record,
-                    )
-                else:
-                    logger.info(
-                        "[dry-run] Would update listItem for %r", book.title
-                    )
 
-        # Finished books also appear in the Recent list.
-        if list_type == "read_books":
-            recent_list_uri = list_uris.get("recent")
-            if recent_list_uri:
+        # Keep the Recent list in sync: finished books appear, others are removed.
+        recent_list_uri = list_uris.get("recent")
+        if recent_list_uri:
+            if list_type == "read_books":
                 self._sync_to_recent_list(
-                    book, recent_list_uri, identifiers, now
+                    book, recent_list_uri, identifiers, id_key, now
                 )
+            else:
+                self._remove_from_recent_list(book, id_key)
 
     def _sync_to_recent_list(
         self,
         book: HardcoverBook,
         recent_list_uri: str,
         identifiers: PopfeedIdentifiers,
+        id_key: str,
         now: str,
     ) -> None:
         """Add or update a finished book in the Recent list.
@@ -439,48 +483,62 @@ class PopfeedClient:
             book (HardcoverBook): The finished book to sync.
             recent_list_uri (str): AT URI of the Recent list.
             identifiers (PopfeedIdentifiers): Book identifiers.
+            id_key (str): The book's deterministic identity segment.
             now (str): ISO-8601 timestamp used as ``updatedAt`` fallback.
         """
         did = self._atproto.session.did
+        recent_rkey = _recent_rkey(id_key)
         desired = _build_recent_list_item_record(
             book, recent_list_uri, identifiers, now
         )
-        existing = self._find_existing_list_item(
-            did, identifiers, list_uri=recent_list_uri
+
+        existing = self._atproto.get_record(
+            did, _COLLECTION_LIST_ITEM, recent_rkey
         )
+        existing_value = existing.get("value") if existing else None
+        if existing_value:
+            # Preserve original timestamps so re-runs do not churn the record.
+            if existing_value.get("addedAt"):
+                desired["addedAt"] = existing_value["addedAt"]
+            if existing_value.get("completedAt"):
+                desired["completedAt"] = existing_value["completedAt"]
 
-        if existing is None:
-            logger.info("[create] %r in Recent list", book.title)
-            if not self._dry_run:
-                self._atproto.create_record(
-                    did=did,
-                    collection=_COLLECTION_LIST_ITEM,
-                    record=desired,
-                )
-            else:
-                logger.info(
-                    "[dry-run] Would add %r to Recent list", book.title
-                )
-            return
-
-        existing_value: dict = existing.get("value", {})
-        if not _needs_recent_update(existing_value, desired):
+        if existing_value is not None and not _needs_recent_update(
+            existing_value, desired
+        ):
             logger.debug("No update needed for %r in Recent list", book.title)
             return
 
-        rkey: str = existing["uri"].split("/")[-1]
-        logger.info("[update] %r in Recent list", book.title)
+        verb = "update" if existing_value is not None else "create"
+        logger.info("[%s] %r in Recent list", verb, book.title)
         if not self._dry_run:
             self._atproto.put_record(
                 did=did,
                 collection=_COLLECTION_LIST_ITEM,
-                rkey=rkey,
+                rkey=recent_rkey,
                 record=desired,
             )
         else:
             logger.info(
-                "[dry-run] Would update %r in Recent list", book.title
+                "[dry-run] Would %s %r in Recent list", verb, book.title
             )
+
+    def _remove_from_recent_list(
+        self, book: HardcoverBook, id_key: str
+    ) -> None:
+        """Remove a no-longer-finished book from the Recent list, if present.
+
+        Parameters:
+            book (HardcoverBook): The book whose status is not ``read_books``.
+            id_key (str): The book's deterministic identity segment.
+        """
+        if self._dry_run:
+            return
+        did = self._atproto.session.did
+        # delete_record tolerates a missing record, so no existence check needed.
+        self._atproto.delete_record(
+            did, _COLLECTION_LIST_ITEM, _recent_rkey(id_key)
+        )
 
 
 def _needs_update(existing: dict, desired: dict) -> bool:

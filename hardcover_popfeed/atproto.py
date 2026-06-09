@@ -10,6 +10,29 @@ logger = logging.getLogger(__name__)
 _SESSION_COLLECTION_LIMIT = 100
 
 
+def _is_record_not_found(response: httpx.Response) -> bool:
+    """Return True when a response means "record does not exist".
+
+    A missing record surfaces as HTTP 404 on some PDS implementations and as
+    HTTP 400 with an ``error: "RecordNotFound"`` body on others (e.g. the
+    reference Bluesky PDS).
+
+    Parameters:
+        response (httpx.Response): The XRPC response to inspect.
+
+    Returns:
+        bool: True when the record is absent.
+    """
+    if response.status_code == 404:
+        return True
+    if response.status_code == 400:
+        try:
+            return response.json().get("error") == "RecordNotFound"
+        except Exception:
+            return False
+    return False
+
+
 class AtProtoError(Exception):
     """Raised when an AT Protocol request fails."""
 
@@ -238,6 +261,67 @@ class AtProtoClient:
             raise AtProtoError(f"createRecord request failed: {exc}") from exc
         self._raise_for_error(response)
         return response.json()
+
+    def get_record(
+        self, did: str, collection: str, rkey: str
+    ) -> Optional[dict]:
+        """Fetch a single record by its deterministic rkey.
+
+        Parameters:
+            did (str): The repo DID.
+            collection (str): The collection NSID.
+            rkey (str): The record key.
+
+        Returns:
+            Optional[dict]: The record (``{ uri, cid, value }``), or ``None``
+                when the record does not exist.
+
+        Raises:
+            AtProtoError: On request failure other than a missing record.
+
+        Note:
+            A missing record returns HTTP 404 on some PDS implementations and
+            HTTP 400 with ``error: "RecordNotFound"`` on others (e.g. the
+            reference Bluesky PDS); both are treated as absent.
+        """
+        url = f"{self._pds_url}/xrpc/com.atproto.repo.getRecord"
+        params = {"repo": did, "collection": collection, "rkey": rkey}
+        try:
+            response = self._http.get(
+                url,
+                params=params,
+                headers=self._auth_headers(),
+            )
+        except httpx.RequestError as exc:
+            raise AtProtoError(f"getRecord request failed: {exc}") from exc
+        if _is_record_not_found(response):
+            return None
+        self._raise_for_error(response)
+        return response.json()
+
+    def delete_record(self, did: str, collection: str, rkey: str) -> None:
+        """Delete a record by rkey. A missing record is treated as success.
+
+        Parameters:
+            did (str): The repo DID.
+            collection (str): The collection NSID.
+            rkey (str): The record key.
+
+        Raises:
+            AtProtoError: On request failure other than a missing record.
+        """
+        url = f"{self._pds_url}/xrpc/com.atproto.repo.deleteRecord"
+        try:
+            response = self._http.post(
+                url,
+                json={"repo": did, "collection": collection, "rkey": rkey},
+                headers=self._auth_headers(),
+            )
+        except httpx.RequestError as exc:
+            raise AtProtoError(f"deleteRecord request failed: {exc}") from exc
+        if _is_record_not_found(response):
+            return
+        self._raise_for_error(response)
 
     def put_record(self, did: str, collection: str, rkey: str, record: dict) -> dict:
         """Create or replace a record at a specific rkey.

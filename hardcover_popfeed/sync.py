@@ -53,6 +53,10 @@ def run_sync(config: Config) -> None:
 
         list_uris = popfeed.ensure_status_lists()
 
+        # One-time-per-run cleanup: drop legacy random-rkey book records left by
+        # older versions so they do not duplicate the deterministic records below.
+        popfeed.purge_legacy_book_records()
+
         synced = 0
         for book in books:
             try:
