@@ -32,6 +32,9 @@ jobs:
               with:
                   config: cliff.toml
                   args: ${{ startsWith(github.ref, 'refs/tags/') && '--latest --strip header' || '--unreleased --strip header' }}
+              env:
+                  # Lets git-cliff resolve commit authors to GitHub handles.
+                  GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
             - name: Publish GitHub release
               uses: softprops/action-gh-release@v2
